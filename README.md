@@ -1,4 +1,4 @@
-# Drawing insights from any book with Text Mining: Part 1
+# Drawing insights from any book with Text Mining
 
 Check the full article here.
 ## Part 1
