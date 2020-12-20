@@ -1,0 +1,221 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+## Packages and functions
+```{r}
+pacman::p_load(ggplot2,stopwords,tokenizers,wordcloud2,tidytext,tm,readr,stringr,dplyr,wordcloud,RColorBrewer,pdftools,textdata,lexiconPT,ggrepel,igraph,ggraph,paletteer,cartography)
+toSpace <- content_transformer(function (x , pattern ) gsub(pattern, " ", x)) #function needed to transform and replace undesired characters
+```
+
+## 1 Loading the book
+```{r}
+carrie <- readLines("carrie.txt",skipNul = T,encoding = "UTF-8")
+```
+
+Example with book in PDF - you can upload and try with your own
+```{r, eval=FALSE}
+txt <- pdf_text('shining.pdf')
+txt = txt[11:length(txt)-7]
+head(txt)
+```
+
+# Stopwords
+```{r}
+stoppt = stopwords::stopwords("pt", source = "stopwords-iso")
+stopen = stopwords::stopwords("en", source = "stopwords-iso")
+length(stopen)
+```
+
+# Manual adjustment of exactly when the book starts and ends
+```{r}
+carrie = carrie[53:(length(carrie)-43)]
+```
+
+
+# Transformations in the text
+```{r}
+docscarrie <- Corpus(VectorSource(carrie))
+docscarrie <- docscarrie %>%
+  tm_map(toSpace, "/") %>%
+  tm_map(toSpace, "”") %>%
+  tm_map(toSpace, "“") %>%
+  tm_map(toSpace, "@") %>%
+  tm_map(toSpace, "\\|") %>%
+  tm_map(toSpace, "—") %>%
+  tm_map(toSpace, "’") %>%
+  tm_map(toSpace, "…")
+inspect(docscarrie)
+docscarrie <- docscarrie %>%
+  tm_map(content_transformer(tolower)) %>%
+  tm_map(removeNumbers) %>% # Remove numbers 
+  tm_map(removeWords, stopen) %>% # Remove english common stopword 
+  tm_map(removePunctuation) %>% # Remove punctuations 
+  tm_map(stripWhitespace) # Eliminate extra white spaces
+  #docs <- tm_map(docs, removeWords, c("”", "“"))  # Remove your own stop word
+inspect(docscarrie)
+tidy_carrie <- data.frame(text = sapply(docscarrie, as.character), stringsAsFactors = FALSE) %>% 
+  mutate(paragraph = row_number()) %>% 
+  ungroup()
+tidy_carrie <- tidy_carrie %>%  unnest_tokens(input = text, output = word)
+head(tidy_carrie,100)
+```
+
+You can also use trigrams (sets of 3 words):
+```{r}
+carrie_trigrams <- tidy_carrie %>%
+  unnest_tokens(trigram, text, token = "ngrams", n = 3) %>%
+  tidyr::separate(trigram, c("word1", "word2", "word3"), sep = " ") %>%
+  filter(!is.na(word1)) %>%
+  count(word1, word2, word3, sort = TRUE)
+
+carrie_trigrams %>%
+  top_n(n = 10,wt = n) %>%
+  tidyr::unite("word",word1,word2,word3,sep=" ") %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(n, word, fill=n)) +
+  geom_col() +
+  scale_fill_gradient(low="#EF3B2C",high="#CB181D")+
+  labs(title = "Most frequent bigrams in 'Carrie'",y = "Bigrams",x="No. of times") +  geom_text(aes(label = n), hjust = -0.05, size = 4,
+            position = position_dodge(0.5)) + theme(legend.position = "none",plot.title = element_text(hjust = 0.5))
+```
+
+
+# Most frequent words in Carrie
+```{r}
+#building TermDocumentMatrix
+dtm <- TermDocumentMatrix(docscarrie)
+m <- as.matrix(dtm)
+v <- sort(rowSums(m),decreasing=TRUE)
+d <- data.frame(word = names(v),freq=v)
+head(d, 10)
+
+#grouping 'manually'
+words = tidy_carrie %>% 
+  group_by(word) %>% 
+  summarise(freq = n()) %>% 
+  arrange(desc(freq)) 
+words = as.data.frame(words)
+rownames(words) = words$word
+head(words,10)
+```
+
+
+
+## 3.3 Most frequent words based on Term Document Matrix
+```{r}
+findFreqTerms(dtm, lowfreq = 80)
+barplot(d[1:10,]$freq, las = 2, names.arg = d[1:10,]$word,
+        col ="lightblue", main ="Most frequent words",
+        ylab = "Word frequencies")
+d %>%
+  top_n(n = 10,wt = freq) %>%
+  mutate(word = reorder(word, freq)) %>%
+  ggplot(aes(freq, word, fill=freq)) +
+  geom_col() +
+  scale_fill_gradient(low="#EF3B2C",high="#CB181D")+
+  labs(title = "Most frequent words in 'Carrie'",y = "Frequent Words",x="No. of times") +  geom_text(aes(label = freq), hjust = -0.05, size = 4,
+            position = position_dodge(0.5)) + theme(legend.position = "none",plot.title = element_text(hjust = 0.5))
+  
+```
+
+
+```{r}
+carrie_bigrams <- tidy_carrie %>%
+  unnest_tokens(input = text, output = bigram, token = "ngrams", n = 2) %>%
+  tidyr::separate(bigram, c("word1", "word2"), sep = " ") %>%
+  filter(!is.na(word1)) %>%
+  count(word1,word2, sort = TRUE)
+
+carrie_bigrams %>%
+  top_n(n = 10,wt = n) %>%
+  tidyr::unite("word",word1,word2,sep=" ") %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(n, word, fill=n)) +
+  geom_col() +
+  scale_fill_gradient(low="#EF3B2C",high="#CB181D")+
+  labs(title = "Most frequent bigrams in 'Carrie'",y = "Bigrams",x="No. of times") +  geom_text(aes(label = n), hjust = -0.05, size = 4,
+            position = position_dodge(0.5)) + theme(legend.position = "none",plot.title = element_text(hjust = 0.5))
+```
+
+Network graph for bigrams
+```{r}
+carrie_bigrams
+bigram_graph <- carrie_bigrams %>%
+  filter(n > 5) %>%
+  graph_from_data_frame()
+
+bigram_graph
+
+ggraph(bigram_graph,layout = "fr") +
+  geom_edge_link(color="red") +
+  geom_node_point(color="red") +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1)
+
+a <- grid::arrow(type = "closed", length = unit(.15, "inches"))
+
+ggraph(bigram_graph, layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n), show.legend = FALSE,
+                 arrow = a, end_cap = circle(.07, 'inches')) +
+  geom_node_point(color = "lightblue", size = 5) +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+  theme_void()
+```
+
+## Wordcloud Carrie
+```{r}
+wordcloud2(data = words[1:100,], size = 1.6, 
+#           shape = "oval",
+           rotateRatio = 0.5, 
+           #ellipticity = 1,
+           color= rev(cartography::carto.pal("red.pal",n1=20))
+)
+
+display.carto.pal("red.pal")
+
+# wordcloud(words = d$word, freq = d$freq,
+#           max.words=300  , random.order=FALSE,
+#           colors=rev(head(heat.colors(15))))
+cores = rep("#CB181D",times=100)
+RColorBrewer::brewer.pal(9,"Reds")
+RColorBrewer::display.brewer.all(n=,select="Reds")
+```
+
+## 3.4 Correlation between terms
+```{r,fig.width=12, fig.height=8}
+findAssocs(dtm, terms = "blood", corlimit = 0.2)
+
+wordassociation=findAssocs(x=dtm,terms = head(words$word,10),corlimit = 0.15)
+
+association = as.data.frame(unlist(wordassociation)) %>%
+  tibble::rownames_to_column(var = "word") %>%
+  rename(corr = `unlist(wordassociation)`) %>%
+  tidyr::separate(col=word,sep = "([.])",into=c("word1","word2")) %>%
+  mutate(word1 = factor(word1,levels=head(words$word,10)),wordno = as.numeric(word1)) %>%
+  group_by(word1) %>%
+  slice(seq_len(5)) %>%
+  arrange(word1, desc(corr)) %>%
+  mutate(row = row_number()) %>%
+  ungroup()
+association %>% top_n(n=5,corr)
+
+colors()
+
+ggplot(association, aes(corr, reorder(word2,corr),fill=word1)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~word1,scales="free_y")+
+  theme(panel.grid.major.x = element_blank(),plot.title = element_text(hjust = 0.5)) +
+  ggtitle("Relationship of top words") + xlab("Correlation") + ylab("Words")+ scale_fill_manual(values = cores)
+
+```
+
+# Bibliography 
+https://hub.packtpub.com/9-useful-r-packages-for-nlp-text-mining/#:~:text=OpenNLP%20is%20an%20R%20package,for%20natural%20language%20processing%20activities.&text=It%20provides%20functions%20for%20sentence,the%20Apache%20OpenNLP%20chunking%20parser.
+http://uc-r.github.io/sentiment_analysis
+http://uc-r.github.io/tidy_text
+http://www.sthda.com/english/wiki/text-mining-and-word-cloud-fundamentals-in-r-5-simple-steps-you-should-know
+https://guilhermegarcia.github.io/lusiadas.html
+https://rpubs.com/tsholliger/301914
